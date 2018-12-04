@@ -26,7 +26,6 @@
 #include "seqtarget.h"
 #include "test.h"
 #include "pthread.h"
-#include "threadedsender.h"
 #include <sys/types.h>
 #include <unistd.h>
 
