@@ -62,6 +62,16 @@ void PerfectLink::onMessage(unsigned source, const char* buf, unsigned len)
 
     } // receiving content from another process => we send an ACK
     else if(buf[0] == 0x01) {
+        // if cannot deliver because the buffer is full,
+        // IGNORING the message!
+        if(!canDeliver())
+        {
+#ifdef PERFECTLINK_DEBUG
+            printf("PerfectLink: dropping message\n");
+#endif
+            return;
+        }
+
         // creating message as a string
         string message(buf, len);
 
@@ -206,7 +216,7 @@ void *PerfectLink::sendLoop(void *arg)
 }
 
 PerfectLink::PerfectLink(Sender *s, Receiver *r, Target *target) :
-    Sender(s->getTarget()), ThreadedReceiver(r->getThis(), target)
+    Sender(s->getTarget()), BoundedThreadedReceiver(r->getThis(), MAX_IN_RECEIVE_QUEUE, target)
 {
     r->addTarget(this);
     this->s = s;

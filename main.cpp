@@ -239,7 +239,7 @@ int main(int argc, const char** argv)
 
             // creating objects for broadcast
             br_receivers.push_back(link);
-            br_senders.push_back(new ThreadedSender(link));
+            br_senders.push_back(link);
         }
     }
 

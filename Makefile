@@ -22,6 +22,7 @@ seqtarget.o \
 test.o \
 uniformreliablebroadcast.o \
 threadedreceiver.o \
+boundedthreadedreceiver.o \
 threadedsender.o \
 perfectlink_config.o
 

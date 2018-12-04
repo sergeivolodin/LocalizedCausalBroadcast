@@ -17,7 +17,7 @@
 
 #include "sender.h"
 #include "receiver.h"
-#include "threadedreceiver.h"
+#include "boundedthreadedreceiver.h"
 #include <semaphore.h>
 
 using std::mutex;
@@ -27,7 +27,7 @@ using std::tuple;
 using std::string;
 
 /** @class This class implements the Perfect Link */
-class PerfectLink : public Sender, public ThreadedReceiver, public Target
+class PerfectLink : public Sender, public BoundedThreadedReceiver, public Target
 {
 private:
     /// @brief Map seq number -> message, timestamp
@@ -81,6 +81,12 @@ private:
      * Or the WINDOW SIZE
      * @see perfectlink_config.cpp */
     static unsigned const MAX_IN_QUEUE;
+
+    /**
+     * @brief MAX_IN_RECEIVE_QUEUE Maximal number of messages in the receive queue
+     * @see perfectlink_config.cpp
+     */
+    static unsigned const MAX_IN_RECEIVE_QUEUE;
 
     /** @brief A mutex to be used by the PerfectLink class */
     mutex mtx;
