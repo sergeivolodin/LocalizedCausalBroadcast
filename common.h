@@ -28,7 +28,7 @@ using std::chrono::steady_clock;
 #define LOCALIZED_CAUSAL_BROADCAST
 
 /// @macro Enable tests for main()
-#define DEBUG_TEST 1
+//#define DEBUG_TEST 1
 
 /// @macro Output debug files (.timestamps and .recvall)
 //#define DEBUG_FILES 1
@@ -77,8 +77,9 @@ uint32_t charsToInt32(const char* input);
 void prettyprint(uint32_t* arr, unsigned length);
 
 
-/** @brief Maximal buffer size */
-const unsigned MAXLEN = 1000;
+/** @brief Maximal buffer size
+ * @see https://en.wikipedia.org/wiki/User_Datagram_Protocol */
+const unsigned MAXLEN = 65000;
 
 /**
  * @brief memorylog In Memory Log

@@ -177,6 +177,9 @@ int main(int argc, const char** argv)
     // creating in-memory log
     memorylog = new InMemoryLog(n, "da_proc_" + string(argv[1]) + ".out");
 
+    // sanity check
+    assert(memorylog);
+
 #ifdef DEBUG_FILES
     // writing my PID
     ofstream("da_proc_" + string(argv[1]) + ".pid", std::ios::out) << getpid() << endl;
@@ -233,6 +236,11 @@ int main(int argc, const char** argv)
         {
             UDPSender* sender = new UDPSender(&members, *it, n);
             PerfectLink* link = new PerfectLink(sender, &r);
+
+            // sanity check
+            assert(sender);
+            assert(link);
+
             senders.push_back(sender);
             links.push_back(link);
 

@@ -110,6 +110,10 @@ void testLOG()
     pthread_t* threads = new pthread_t[n_threads];
     int* args = new int[n_threads];
 
+    // sanity check
+    assert(threads);
+    assert(args);
+
     // saving number of threads/messages
     char buf[100];
     snprintf(buf, 99, "%d %d", n_threads, n_msg);

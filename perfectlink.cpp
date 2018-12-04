@@ -261,6 +261,9 @@ void PerfectLink::send(const char* buffer, unsigned length)
 
     // allocating new memory
     char* data = static_cast<char*>(malloc(length + 5));
+
+    // sanity check
+    assert(data != nullptr);
     
     // adding the message to the list
     mtx.lock();
