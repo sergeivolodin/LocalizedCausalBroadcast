@@ -83,7 +83,8 @@ void writeOutputAndHalt()
     cout << "Writing output..." << endl;
 
     // writing output file
-    memorylog->waitForFinishAndExit();
+    memorylog->disable();
+    memorylog->dump(true);
 
     exit(0);
 }

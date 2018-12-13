@@ -1,69 +1,109 @@
 #include <stdio.h>
-#include <unistd.h>
 #include "inmemorylog.h"
 #include "common.h"
+#include <unistd.h>
+#include <cassert>
 
 using std::endl;
 
 void *InMemoryLog::dumpLoop(void *arg)
 {
-    InMemoryLog* log = (InMemoryLog*) arg;
+    InMemoryLog* memorylog = (InMemoryLog*) arg;
+
+    // dumping data continuously
     while(true)
     {
-        // not active -> not dumping
-        if(log->dumperActive) log->dump();
+        // exit when not active
+        if(!memorylog->active)
+            return nullptr;
 
-        // incrementing iteration count
-        log->dumpedIterations++;
+        int dumped = memorylog->dump();
 
-        // stopping
-        usleep(1000);
+        // waiting for new data to appear
+        if(dumped == 0)
+        {
+            struct timespec ts_old, ts, ts_new;
+
+            // locking the timedwait mutex
+            pthread_mutex_lock(&memorylog->lock);
+
+            // obtaining current time
+            clock_gettime(CLOCK_REALTIME, &ts_old);
+
+            // copying data to ts
+            ts = ts_old;
+
+            // waiting at most 1000000 * 1e-9 sec = 1e-3 sec = 1ms
+            ts.tv_sec += 1000000;
+
+            // normalize timespec to protect against EINVAL
+            /// @see https://stackoverflow.com/questions/25254392/how-to-properly-set-timespec-for-sem-timedwait-to-protect-against-einval-error
+            ts.tv_sec += ts.tv_nsec / 1000000000;
+            ts.tv_nsec %= 1000000000;
+
+            // waiting for messages to appear or for a timeout
+            pthread_cond_timedwait(&memorylog->cond, &memorylog->lock, &ts);
+
+            // unlocking the mutex
+            pthread_mutex_unlock(&memorylog->lock);
+
+            // current time
+//            clock_gettime(CLOCK_REALTIME, &ts_new);
+//            printf("OLD %lld.%lld\n", ts_old.tv_sec, ts_old.tv_nsec);
+//            printf("NEW %lld.%lld\n", ts_new.tv_sec, ts_new.tv_nsec);
+        }
     }
-}
 
-void InMemoryLog::rollDumpLoop()
-{
-    // saving current number of iterations
-    uint64_t currentIterations = dumpedIterations;
-
-    // waiting for two more to ensure all data is inside the file
-    while(dumpedIterations < currentIterations + 2)
-    {
-        fprintf(stderr, "+");
-        sleep(1);
-    }
+    // never returns if always active
 }
 
 InMemoryLog::InMemoryLog(unsigned n, string destination_filename) : n(n)
 {
+    // maximal number of messages in the buffer
+    MAX_MESSAGES = 1000000;
+
     // allocating memory
     buffer = new string[MAX_MESSAGES];
     timestamps = new uint64_t[MAX_MESSAGES];
-    used = new bool[MAX_MESSAGES];
 
-    // reserving data for strings
-    for(int i = 0; i < MAX_MESSAGES; i++)
-        const_cast<std::string&>(buffer[i]).reserve(LMAX);
+    // sanity check
+    assert(buffer);
+    assert(timestamps);
 
     // currently, active
     active = true;
-    dumperActive = true;
 
     // opening the file
-    file = fopen(destination_filename.c_str(), "w");
+    file.open(destination_filename, std::ios::out);
 
 #ifdef DEBUG_FILES
     // opening the file
-    file_ts = fopen((destination_filename + ".ts").c_str(), "w");
+    file_ts.open(destination_filename + ".ts", std::ios::out);
 #endif
 
 #ifdef IMMEDIATE_FILE
     // opening the immediate file output
-    file_immediate = fopen((destination_filename + ".nowait").c_str(), "w");
+    file_immediate.open(destination_filename + ".nowait", std::ios::out);
 #endif
 
-    // spawning dumper thread
+#ifdef INMEMORY_PRINT
+    // Logging the beginning
+    log("BEGINNING");
+#endif
+
+    // initializing mutex
+    pthread_mutex_init(&lock, nullptr);
+
+    // initializing condition
+    pthread_cond_init(&cond, nullptr);
+
+    // starting the thread for dumping data
     pthread_create(&dump_thread, nullptr, &InMemoryLog::dumpLoop, this);
+}
+
+InMemoryLog::~InMemoryLog()
+{
+    file.close();
 }
 
 void InMemoryLog::log(std::string content)
@@ -76,84 +116,110 @@ void InMemoryLog::log(std::string content)
 #endif
 
 #ifdef IMMEDIATE_FILE
-    fprintf(file_immediate, "%lld %s\n", time, content.c_str());
+    file_immediate << time << " " << content << endl;
 #endif
 
     // beginning of critical section
-    m.lock();
+    m_write.lock();
 
-    // obtaining write index
-    int currentIndex = writeIndex;
+    /// Using a ring buffer
+    /// [....mmmm..]
+    ///          ^ next write pointer (for logging)
+    ///      ^ next read pointer (for dumping)
+    ///
+    /// [mm...mmm]
+    ///    ^ next write pointer (for logging)
+    ///       ^ next read pointer (for dumping)
 
-    // complaining if all space is used
-    if(used[currentIndex])
-        fprintf(stderr, "WARNING: Log buffer full writeIndex = %d\n", writeIndex);
+    // if buffer is full, dumping data in the worker thread
+    int current_read_index = read_index;
+    if(current_read_index == MAX_MESSAGES)
+        current_read_index = 0;
 
-    // waiting for a variable to change...
-    while(used[currentIndex]) usleep(1000);
+    if((current_read_index == 0 && write_index == MAX_MESSAGES - 1) || write_index == current_read_index - 1)
+    {
+        printf("WARNING: dumping data from the worker thread to avoid data loss. Consider increasing the buffer size\n");
+        printf("Current_read_index %d write index %d\n", current_read_index, write_index);
+        dump();
+    }
 
-    // incrementing write index, wrapping counter if it's at the end
-    if(writeIndex == MAX_MESSAGES - 1)
-        writeIndex = 0;
-    else writeIndex++;
+    //printf("Current write index %d Current read index %d\n", write_index, read_index);
+
+    // adding data
+    buffer[write_index] = content;
+    timestamps[write_index] = time;
+    write_index++;
+
+    // starting to write from the beginning
+    if(write_index == MAX_MESSAGES)
+        write_index = 0;
 
     // end of critical section
-    m.unlock();
+    m_write.unlock();
 
-    // adding content to vector
-    const_cast<std::string&>(buffer[currentIndex]) = content;
-    timestamps[currentIndex] = time;
-
-    // marking cell as used, now the reader thread will proceed
-    used[currentIndex] = true;
+    // signalling the dumping thread that there are new messages
+    pthread_cond_signal(&cond);
 }
 
-void InMemoryLog::waitForFinishAndExit()
+int InMemoryLog::dump(bool last)
 {
-    // disabling new workers (so will get at most |threads| new messages)
-    active = false;
+    m_read.lock();
 
-    // dumping existing messages
-    rollDumpLoop();
+    // getting current number of messages
+    // DONT CARE if there are writers right now
+    int current_write_index = write_index;
 
-    // now disabling the dumper thread to avoid any possible issues with writing
-    dumperActive = false;
+    // can read intermediate value for write_index
+    if(current_write_index == MAX_MESSAGES)
+        current_write_index = 0;
 
-    // waiting for more iterations to ensure all writes are done
-    rollDumpLoop();
+    // number of dumped messages
+    int dumped = 0;
 
-    // no more writes and all messages prior to active=false are dumped => closing the file
-    fclose(file);
-
-#ifdef DEBUG_FILES
-    fclose(file_ts);
-#endif
-
-    // rollDumpLoop prints progress, switching to new line
-    fprintf(stderr, "\n");
-}
-
-void InMemoryLog::dump()
-{
-    // dumping all existing messages to disk
-    while(true)
+    // loop over buffer
+    for(; ; read_index++)
     {
-        // doing nothing if have nothing to read
-        if(!used[readIndex]) break;
+        // going to the beginning
+        if(read_index == MAX_MESSAGES)
+            read_index = 0;
+
+        // if have i at an empty element
+        if(read_index == current_write_index)
+            break;
 
         // writing data
-        fprintf(file, "%s\n", const_cast<std::string&>(buffer[readIndex]).c_str());
+        file << buffer[read_index] << std::endl;
+        dumped++;
 
 #ifdef DEBUG_FILES
-        fprintf(file_ts, "%lld %s\n", timestamps[readIndex], const_cast<std::string&>(buffer[readIndex]).c_str());
+        file_ts << timestamps[read_index] << " " << buffer[read_index] << std::endl;
 #endif
-
-        // marking cell as free and thus allowing to write to it
-        used[readIndex] = false;
-
-        // moving on
-        if(readIndex == MAX_MESSAGES - 1)
-            readIndex = 0;
-        else readIndex++;
     }
+
+    // at last iteration: close the file
+    // and do not unlock the mutex
+    if(last)
+    {
+        printf("%s", "Dumped all remaining messages. Closing the log file...\n");
+        close();
+    }
+    // otherwise, allow for subsequent dump() calls
+    else
+    {
+        //printf("Dumped %d messages up to %d, continuing...\n", dumped, current_write_index);
+        m_read.unlock();
+    }
+
+    return dumped;
+}
+
+void InMemoryLog::close()
+{
+    file.close();
+}
+
+void InMemoryLog::disable()
+{
+    m_write.lock();
+    active = false;
 }

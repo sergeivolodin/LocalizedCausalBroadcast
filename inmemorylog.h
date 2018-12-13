@@ -10,78 +10,72 @@
 class ImMemoryLog;
 
 #include <string>
+#include <fstream>
 #include <mutex>
-#include <list>
+#include <semaphore.h>
 #include <pthread.h>
-#include <stdio.h>
 
 using std::string;
+using std::ofstream;
 using std::mutex;
-using std::list;
-
-#define LMAX 255
 
 /** @class This class implements the In Memory Log */
 class InMemoryLog
 {
 private:
+    /// Dump thread
+    pthread_t dump_thread;
 
     /// Output file
-    FILE* file;
+    ofstream file;
 
     /// Output file with timestamps
-    FILE* file_ts;
+    ofstream file_ts;
 
     /// Output file (immediate)
-    FILE* file_immediate;
+    ofstream file_immediate;
 
-    /// Maximal number of messages
-    static const int MAX_MESSAGES = 1000000;
+    /// @brief The lock for cond wait
+    pthread_mutex_t lock;
 
-    /// Current write pointer
-    volatile int writeIndex = 0;
+    /// @brief The wait condition to wake up the dumper thread
+    pthread_cond_t cond;
 
-    /// Current read pointer
-    volatile int readIndex = 0;
+    /// Maximal number of messages between dumps
+    int MAX_MESSAGES;
+
+    /// Using a ring buffer
+    /// [mm...mmm]
+    ///    ^ next write pointer (for logging)
+    ///       ^ next read pointer (for dumping)
+
+    /// Next write pointer
+    volatile int write_index = 0;
+
+    /// Next read pointer
+    volatile int read_index = 0;
 
     /// Is function log() working now?
     volatile bool active;
 
-    /// Should dumper thread dump data?
-    volatile bool dumperActive;
-
     /// Buffer for data
-    volatile string *buffer;
+    string *buffer;
 
-    /// Buffer for data
-    volatile uint64_t *timestamps;
-
-    /// Is a cell used by some message?
-    volatile bool* used;
-
-    /// Number of iterations dump thread made
-    volatile uint64_t dumpedIterations = 0;
+    /// Buffer for time
+    uint64_t *timestamps;
 
     /// Mutex for buffer access
-    mutex m;
+    mutex m_write, m_read;
 
     /// @brief Process ID
     unsigned n;
 
-    /** Dump thread loop */
-    static void* dumpLoop(void* arg);
-
-    /// Dump thread
-    pthread_t dump_thread;
-
-    /** Wait for two iterations of dump loop, thus guaranteeing one complete total pass */
-    void rollDumpLoop();
-
     /**
-     * @brief Dump all data to file from memory
-     * Call from ONE thread only!
+     * @brief dumpLoop Dumps the data to the file continuously
+     * @param arg Instance of InMemoryLog
+     * @return never returns
      */
-    void dump();
+    static void* dumpLoop(void* arg);
 public:
     /**
      * @brief InMemoryLog initializer
@@ -89,14 +83,29 @@ public:
      */
     InMemoryLog(unsigned n, string destination_filename);
 
+    /** @brief Closes the file */
+    ~InMemoryLog();
+
     /**
      * @brief log Logs a string
      * @param content The string to log
      */
     void log(string content);
 
-    /** Waits until all data is in the file and closes the file */
-    void waitForFinishAndExit();
+    /**
+     * @brief Dump all data to file from memory
+     * @param last Set to true to close the file after writing
+     * @returns Number of dumped messages
+     */
+    int dump(bool last = false);
+
+    /** @brief Close the file */
+    void close();
+
+    /**
+     * @brief disable Make subsequent log() calls do nothing
+     */
+    void disable();
 };
 
 #endif // INMEMORYLOG_H
